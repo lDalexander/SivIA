@@ -5,6 +5,12 @@
 > aquí componentes planificados como si estuvieran operativos.
 >
 > Última verificación: 2026-07-27.
+>
+> **Mapa de la documentación:**
+> - `CLAUDE.md` (este archivo) — arquitectura, decisiones técnicas y pendientes.
+> - [`FUNCIONAMIENTO.md`](FUNCIONAMIENTO.md) — cómo funciona: el recorrido de un
+>   dato, capas de validación, manejo de errores.
+> - [`README.md`](README.md) — instalación, variables de entorno y operación.
 
 ## 1. Visión del Proyecto
 **SivIA** (*Sistema de Inventario por Voz con Inteligencia Artificial*) es una solución Edge-AI orientada al control de stock e inventarios para negocios de alimentos y suministros. El sistema captura comandos de voz natural, extrae entidades estandarizadas (Producto, Cantidad, Tipo de Movimiento) mediante un modelo LLM local y persiste las transacciones en una base de datos relacional. Todo el procesamiento de IA es local: ningún dato del negocio sale del dispositivo.
@@ -57,7 +63,18 @@
 - **Esquema:** gestionado por **Alembic** (ver §3.4). El evento `startup` con 10
   reintentos ya **no crea tablas**: solo espera a que MySQL acepte conexiones y
   registra en el log la revisión aplicada. No devolver `create_all()` aquí — ver
-  la decisión 6 de la §6.
+  la decisión 6 de la §7.
+
+### 3.3 Base de Datos (Contenedor Docker) ✅ Operativo
+- **Motor:** MySQL 8.0 (arm64).
+- **Persistencia:** volumen sobre el SSD NVMe: `./database/data -> /var/lib/mysql`.
+- **Red:** **no** publica el puerto 3306 al host. Solo accesible por la red interna de Docker (`db:3306`).
+- **Estructura de Datos (`movimientos_inventario`):**
+  - `id` (INT, PK, auto-increment)
+  - `producto` (VARCHAR 100, NOT NULL, indexado, normalizado en MAYÚSCULAS)
+  - `cantidad` (INT, NOT NULL, `CHECK (cantidad > 0)`)
+  - `tipo_movimiento` (VARCHAR 20, NOT NULL, `CHECK IN ('INGRESO','EGRESO')`)
+  - `fecha` (DATETIME, NOT NULL, indexado, UTC naive — MySQL DATETIME no guarda zona horaria)
 
 ### 3.4 Migraciones de Esquema (Alembic) ✅ Operativo
 - **Modelo aislado:** el esquema vive en `backend/models.py`, no en `main.py`, para
@@ -78,17 +95,6 @@
 - **Verificado:** `revision --autogenerate` sobre el esquema vivo produce un
   `upgrade()` vacío, lo que confirma que la revisión base es fiel al esquema real.
   El ciclo `upgrade` → `downgrade` se probó extremo a extremo sin pérdida de datos.
-
-### 3.3 Base de Datos (Contenedor Docker) ✅ Operativo
-- **Motor:** MySQL 8.0 (arm64).
-- **Persistencia:** volumen sobre el SSD NVMe: `./database/data -> /var/lib/mysql`.
-- **Red:** **no** publica el puerto 3306 al host. Solo accesible por la red interna de Docker (`db:3306`).
-- **Estructura de Datos (`movimientos_inventario`):**
-  - `id` (INT, PK, auto-increment)
-  - `producto` (VARCHAR 100, NOT NULL, indexado, normalizado en MAYÚSCULAS)
-  - `cantidad` (INT, NOT NULL, `CHECK (cantidad > 0)`)
-  - `tipo_movimiento` (VARCHAR 20, NOT NULL, `CHECK IN ('INGRESO','EGRESO')`)
-  - `fecha` (DATETIME, NOT NULL, indexado, UTC naive — MySQL DATETIME no guarda zona horaria)
 
 ### 3.5 Tests Automatizados ✅ Operativo
 - **79 tests**, suite completa en **~0,6 s**. Se ejecutan con `scripts/probar.sh`.
@@ -160,7 +166,30 @@ credenciales, como exige la especificación CORS.
 
 ---
 
-## 6. Decisiones de diseño que conviene no revertir
+## 6. Control de Versiones y Repositorio
+
+- **Remoto:** https://github.com/lDalexander/SivIA — **privado**, rama `main`.
+- **Autenticación:** `gh` CLI con credential helper (`gh auth setup-git`), protocolo
+  HTTPS. El token vive en `~/.config/gh/hosts.yml`, fuera del repositorio.
+- **Higiene de secretos — regla que no se negocia:**
+  - `.env` y `database/data/` están en `.gitignore`. Verificar con
+    `git check-ignore -v .env database/data/` antes de cualquier primer commit.
+  - **Nunca** escribir una credencial en un archivo versionado, ni siquiera una ya
+    rotada e inválida: revela el patrón de nomenclatura. Ocurrió con
+    `scripts/aplicar_rotacion.sh`, que llevaba embebida la contraseña antigua; se
+    reescribieron los commits afectados antes de publicar y ahora la recibe por la
+    variable de entorno `PASS_ROOT_ANTERIOR`.
+  - Auditoría antes de publicar:
+    ```bash
+    git grep -l -E 'patron|de|secretos' $(git rev-list --all)
+    ```
+- **`scripts/aplicar_rotacion.sh`:** rota las contraseñas de MySQL con `ALTER USER`.
+  Existe porque las variables del compose solo se aplican en la **primera**
+  inicialización del volumen: cambiar `.env` no las propaga. Es idempotente.
+
+---
+
+## 7. Decisiones de diseño que conviene no revertir
 
 1. **Sin defaults silenciosos en la extracción.** Si el LLM no determina producto,
    cantidad o tipo con certeza, la API responde **422 y no escribe nada**. La
@@ -185,20 +214,33 @@ credenciales, como exige la especificación CORS.
 
 ---
 
-## 7. Comandos de operación
+## 8. Comandos de operación
 
 ```bash
+# --- Ciclo de vida de los servicios ---
 docker compose up -d --build     # reconstruir y arrancar
 docker compose ps                # ambos servicios deben quedar 'healthy'
 docker compose logs -f api       # logs de la API
-curl localhost:8000/health       # diagnóstico de dependencias
+docker compose restart api       # reiniciar tras cambiar .env
+
+# --- Diagnóstico ---
+curl localhost:8000/health       # estado de MySQL y Ollama
 systemctl status ollama          # estado del motor de IA
 ollama list                      # modelos descargados
+
+# --- Tests y esquema ---
+bash scripts/probar.sh           # suite completa (~0,6 s)
+bash scripts/migrar.sh estado    # revisión de esquema aplicada
+bash scripts/migrar.sh upgrade   # aplicar migraciones pendientes
 ```
+
+**Orden al cambiar el esquema:** editar `backend/models.py` →
+`migrar.sh nueva "desc"` → **revisar el archivo generado** → `migrar.sh sql` para
+ver el SQL → `migrar.sh upgrade` → `probar.sh`.
 
 ---
 
-## 8. Pendientes conocidos
+## 9. Pendientes conocidos
 
 - ⬜ **Tests de integración.** La suite actual aísla MySQL y Ollama. Falta un
   puñado de tests contra los servicios reales: que las `CHECK` de MySQL
@@ -208,7 +250,7 @@ ollama list                      # modelos descargados
 - ⬜ **Catálogo de productos y unidades de medida.** `producto` es texto libre
   normalizado; «AREPA» y «AREPAS» son productos distintos para el sistema.
 - ⬜ **Normalización de nombres de producto multipalabra.** Defecto observado el
-  2026-07-28: el comando «Llegaron 20 panes de yuca» se guardó como
+  2026-07-27: el comando «Llegaron 20 panes de yuca» se guardó como
   `PANES_DE_YACA` — el modelo insertó guiones bajos y además escribió mal «yuca».
   El prompt exige mayúsculas pero no dice nada sobre separadores ni sobre
   preservar la ortografía literal. Con texto libre, cada variante crea un producto

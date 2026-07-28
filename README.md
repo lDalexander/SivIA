@@ -8,6 +8,11 @@ Todo el procesamiento de IA ocurre en el dispositivo: **ningún dato sale a la n
 Voz → transcripción → FastAPI → Qwen2.5:3b (Ollama local) → MySQL
 ```
 
+> 📖 **¿Quieres entender cómo funciona por dentro?** →
+> [`FUNCIONAMIENTO.md`](FUNCIONAMIENTO.md) explica el recorrido completo de un
+> comando, por qué cada pieza está donde está, y qué ocurre cuando algo falla.
+> Este README cubre la instalación y la operación.
+
 ---
 
 ## Stack
