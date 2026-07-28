@@ -1,0 +1,58 @@
+services:
+  # Servicio de Base de Datos MySQL sobre el SSD NVMe
+  db:
+    image: mysql:8.0
+    container_name: sivia_db
+    restart: always
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: ${MYSQL_DATABASE}
+      MYSQL_USER: ${MYSQL_USER}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+    # Sin mapeo de puertos al host: la API alcanza MySQL por la red interna de
+    # Docker (db:3306). Exponer 3306 solo añadiría superficie de ataque en la LAN.
+    volumes:
+      - ./database/data:/var/lib/mysql
+    healthcheck:
+      # Con credenciales: 'ping' sin autenticar responde "alive" incluso cuando
+      # el acceso está denegado, dando un healthy falso.
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-u", "root", "-p${MYSQL_ROOT_PASSWORD}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    mem_limit: 1500m
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # Servicio API REST FastAPI (SivIA Core)
+  api:
+    build: ./backend
+    image: sivia-api:latest
+    container_name: sivia_api
+    restart: always
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=mysql+pymysql://${MYSQL_USER}:${MYSQL_PASSWORD}@db:3306/${MYSQL_DATABASE}
+      - OLLAMA_HOST=${OLLAMA_HOST}
+      - MODEL_NAME=${MODEL_NAME}
+      - OLLAMA_TIMEOUT=${OLLAMA_TIMEOUT:-60}
+      - SIVIA_API_KEY=${SIVIA_API_KEY}
+      - CORS_ORIGINS=${CORS_ORIGINS:-*}
+    depends_on:
+      db:
+        condition: service_healthy
+    # Permite alcanzar Ollama nativo del host como host.docker.internal,
+    # además de la IP del bridge 172.17.0.1.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    mem_limit: 512m
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

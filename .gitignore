@@ -1,0 +1,45 @@
+# ---- Secretos y configuración local ----
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+
+# ---- Datos de MySQL (volumen persistente en el SSD) ----
+database/data/
+*.sql.gz
+*.dump
+
+# ---- Bases de datos locales ----
+*.db
+*.sqlite
+*.sqlite3
+
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+.venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+
+# ---- Scripts de instalación descargados ----
+get-docker.sh
+
+# ---- Logs ----
+*.log
+logs/
+
+# ---- Sistema operativo / editores ----
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*~
