@@ -50,3 +50,18 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
     CMD python -c "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/', timeout=4).status == 200 else 1)"
 
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+
+
+# ---------- ETAPA 3: TESTS (no forma parte de la imagen de producción) ----------
+# Se construye solo con --target tests (ver scripts/probar.sh). El servicio 'api'
+# del compose fija 'target: runtime', así que esta etapa nunca llega a la Pi y la
+# imagen de producción no carga con pytest ni sus dependencias.
+FROM runtime AS tests
+
+USER root
+COPY requirements-dev.txt .
+RUN pip install --no-cache-dir -r requirements-dev.txt
+USER appuser
+
+# La suite no necesita MySQL ni Ollama: usa SQLite en memoria y un doble del LLM.
+CMD ["pytest"]

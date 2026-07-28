@@ -1,0 +1,6 @@
+# Dependencias exclusivas de desarrollo y testing.
+# Deliberadamente separadas de requirements.txt para que NO entren en la imagen
+# de producción: el contenedor que corre en la Raspberry Pi no las necesita.
+-r requirements.txt
+
+pytest==8.2.2

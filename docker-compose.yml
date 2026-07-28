@@ -34,7 +34,11 @@ services:
 
   # Servicio API REST FastAPI (SivIA Core)
   api:
-    build: ./backend
+    build:
+      context: ./backend
+      # Explícito: el Dockerfile tiene una etapa 'tests' posterior que NO debe
+      # acabar en la imagen de producción.
+      target: runtime
     image: sivia-api:latest
     container_name: sivia_api
     restart: always

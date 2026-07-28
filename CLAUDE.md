@@ -90,6 +90,23 @@
   - `tipo_movimiento` (VARCHAR 20, NOT NULL, `CHECK IN ('INGRESO','EGRESO')`)
   - `fecha` (DATETIME, NOT NULL, indexado, UTC naive — MySQL DATETIME no guarda zona horaria)
 
+### 3.5 Tests Automatizados ✅ Operativo
+- **79 tests**, suite completa en **~0,6 s**. Se ejecutan con `scripts/probar.sh`.
+- **Aislamiento total:** SQLite en memoria (una base limpia por test) y un doble
+  de `consultar_ollama`. El contenedor corre con `--network none`: un test que
+  necesite red es un test que no está aislado.
+- **Etapa `tests` del Dockerfile:** `pytest` vive en `requirements-dev.txt` y solo
+  se instala en esa etapa. El servicio `api` del compose fija `target: runtime`,
+  así que la imagen de producción **no** contiene pytest (verificado: 385 MB y
+  `ModuleNotFoundError: No module named 'pytest'`).
+- **Lo que cubren:** `validar_entidades` (todos los caminos de rechazo),
+  `extraer_json` (envoltorios de markdown), y los endpoints — autenticación,
+  códigos de estado, aritmética del stock, y sobre todo que una extracción
+  defectuosa devuelva 422 **sin escribir nada**.
+- **Lo que NO cubren:** la calidad de extracción del LLM (no es nuestro código) ni
+  el comportamiento específico de MySQL frente a SQLite. Para eso haría falta una
+  suite de integración, aún pendiente.
+
 ---
 
 ## 4. Estructura de Archivos
@@ -103,12 +120,16 @@
 ├── README.md
 ├── CLAUDE.md
 ├── scripts/
+│   ├── probar.sh         # suite de tests
 │   ├── migrar.sh         # gestión de migraciones (Alembic)
 │   └── aplicar_rotacion.sh
 ├── backend/
 │   ├── Dockerfile        # multi-etapa, usuario no-root
 │   ├── .dockerignore
 │   ├── requirements.txt
+│   ├── requirements-dev.txt  # solo testing, fuera de la imagen de producción
+│   ├── pytest.ini
+│   ├── tests/            # 79 tests, sin dependencias externas
 │   ├── alembic.ini
 │   ├── migrations/       # revisiones de esquema versionadas
 │   │   ├── env.py
@@ -179,7 +200,9 @@ ollama list                      # modelos descargados
 
 ## 8. Pendientes conocidos
 
-- ⬜ **Suite de tests.** No hay ninguna. Hoy la única verificación es `curl` manual.
+- ⬜ **Tests de integración.** La suite actual aísla MySQL y Ollama. Falta un
+  puñado de tests contra los servicios reales: que las `CHECK` de MySQL
+  rechacen de verdad, y que el modelo extraiga bien un comando típico.
 - ⬜ **App móvil / captura de voz.** No existe. El proyecto es backend puro; la
   transcripción de audio a texto se asume externa (el endpoint recibe ya el texto).
 - ⬜ **Catálogo de productos y unidades de medida.** `producto` es texto libre

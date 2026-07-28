@@ -10,6 +10,7 @@ import time
 import logging
 import secrets
 from typing import List, Optional
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 
 import httpx
@@ -17,7 +18,7 @@ from fastapi import FastAPI, HTTPException, Depends, Query, Path, Security, stat
 from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import APIKeyHeader
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import create_engine, func, case, text
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import sessionmaker, Session
@@ -92,14 +93,14 @@ class RespuestaExito(BaseModel):
 
 
 class MovimientoOut(BaseModel):
+    # ConfigDict en lugar de 'class Config', deprecado en Pydantic 2.
+    model_config = ConfigDict(from_attributes=True)
+
     id: int
     producto: str
     cantidad: int
     tipo_movimiento: str
     fecha: datetime
-
-    class Config:
-        from_attributes = True
 
 
 class StockOut(BaseModel):
@@ -112,10 +113,22 @@ class StockOut(BaseModel):
 
 
 # --- INICIALIZACIÓN DE FASTAPI ---
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Ciclo de vida de la aplicación (sustituye a @app.on_event, deprecado).
+
+    verificar_base_de_datos se define más abajo: el nombre se resuelve en el
+    momento de la llamada, cuando el módulo ya está cargado por completo.
+    """
+    verificar_base_de_datos()
+    yield
+
+
 app = FastAPI(
     title="SivIA - Sistema de Inventario por Voz con IA",
     description="Backend de procesamiento inteligente de comandos de voz para control de stock.",
     version="1.1.0",
+    lifespan=lifespan,
 )
 
 # CORS: necesario para que la app móvil/web pueda consumir la API desde un navegador.
@@ -153,7 +166,6 @@ def get_db():
 
 
 # --- ARRANQUE ---
-@app.on_event("startup")
 def verificar_base_de_datos() -> None:
     """Espera a que MySQL acepte conexiones y comprueba el estado del esquema.
 
@@ -165,32 +177,44 @@ def verificar_base_de_datos() -> None:
     Va en el startup y no en tiempo de import para que MySQL pueda tardar en
     aceptar conexiones sin tumbar el proceso durante el import del módulo.
     """
+    # Paso 1: conectividad. Se comprueba con un SELECT 1, aparte de la consulta
+    # del esquema, porque «tabla inexistente» y «servidor no disponible» pueden
+    # ser la misma clase de excepción según el motor (en SQLite ambas son
+    # OperationalError). Mezclarlos hacía que una base sin migrar se reintentara
+    # 10 veces como si el servidor estuviera caído.
     ultimo_error: Optional[Exception] = None
+    conectada = False
     for intento in range(1, 11):
         try:
             with engine.connect() as conexion:
-                revision = conexion.execute(
-                    text("SELECT version_num FROM alembic_version")
-                ).scalar()
-            logger.info("Base de datos accesible. Revisión de esquema: %s", revision)
-            return
+                conexion.execute(text("SELECT 1"))
+            conectada = True
+            break
         except OperationalError as exc:
             ultimo_error = exc
             logger.warning(
-                "MySQL no disponible todavía (intento %d/10). Reintentando en 3s...",
+                "Base de datos no disponible todavía (intento %d/10). Reintentando en 3s...",
                 intento,
             )
             time.sleep(3)
-        except Exception:
-            # La tabla alembic_version no existe: base sin migrar. No es motivo
-            # para abortar (los endpoints de lectura y /health siguen siendo
-            # útiles), pero debe quedar bien visible en los logs.
-            logger.error(
-                "La base de datos no tiene migraciones aplicadas. "
-                "Ejecutar: bash scripts/migrar.sh upgrade"
-            )
-            return
-    raise RuntimeError(f"No se pudo conectar con la base de datos: {ultimo_error}")
+
+    if not conectada:
+        raise RuntimeError(f"No se pudo conectar con la base de datos: {ultimo_error}")
+
+    # Paso 2: estado del esquema. Informativo: una base sin migrar no impide
+    # arrancar (los endpoints de lectura y /health siguen siendo útiles), pero
+    # debe quedar bien visible en los logs.
+    try:
+        with engine.connect() as conexion:
+            revision = conexion.execute(
+                text("SELECT version_num FROM alembic_version")
+            ).scalar()
+        logger.info("Base de datos accesible. Revisión de esquema: %s", revision)
+    except Exception:
+        logger.warning(
+            "Base de datos accesible, pero sin migraciones aplicadas. "
+            "Ejecutar: bash scripts/migrar.sh upgrade"
+        )
 
 
 # --- UTILIDADES INTERNAS ---
@@ -370,8 +394,21 @@ async def procesar_comando_voz(solicitud: SolicitudVoz, db: Session = Depends(ge
     Recibe la transcripción del comando de voz, consulta a Qwen2.5:3b en Ollama
     para extraer entidades y registra el movimiento en la base de datos.
     """
-    entidades = await consultar_ollama(solicitud.texto)
-    producto, cantidad, movimiento = validar_entidades(entidades)
+    try:
+        entidades = await consultar_ollama(solicitud.texto)
+        producto, cantidad, movimiento = validar_entidades(entidades)
+    except HTTPException:
+        # Los errores ya clasificados (422 de extracción, 5xx de Ollama) se
+        # propagan con su código. Sin este 'raise' explícito, el manejador
+        # genérico de abajo los convertiría en 500 y perderíamos el diagnóstico.
+        raise
+    except Exception as exc:
+        # Cualquier fallo no previsto: al log con traza completa, al cliente un
+        # mensaje genérico. Los detalles filtrarían rutas, drivers y el prompt.
+        logger.exception("Fallo inesperado al extraer las entidades: %s", exc)
+        raise HTTPException(
+            status_code=500, detail="Fallo interno al procesar el comando de voz."
+        )
 
     def guardar() -> MovimientoInventario:
         nuevo = MovimientoInventario(

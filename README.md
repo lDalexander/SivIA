@@ -214,6 +214,28 @@ systemctl status ollama             # estado del motor de IA
 curl localhost:8000/health          # diagnóstico rápido de dependencias
 ```
 
+### Tests automatizados
+
+```bash
+bash scripts/probar.sh                      # toda la suite (~0,6 s)
+bash scripts/probar.sh -k validar           # solo los que coincidan
+bash scripts/probar.sh tests/test_endpoints.py   # un archivo concreto
+```
+
+**79 tests** sobre la validación de entidades, la extracción de JSON y los
+endpoints HTTP. No necesitan MySQL ni Ollama: usan SQLite en memoria y un doble
+del LLM, y corren con `--network none` para garantizar el aislamiento. Por eso la
+suite entera tarda menos de un segundo.
+
+Las dependencias de test viven en `requirements-dev.txt` y solo se instalan en la
+etapa `tests` de la imagen, así que **la imagen de producción no incluye pytest**.
+
+Sustituir el LLM por un doble permite provocar a voluntad los fallos que con el
+modelo real son casi imposibles de reproducir: que devuelva `cantidad: 0`, un
+`tipo_movimiento` inventado, JSON no parseable, o que Ollama esté caído. Lo que se
+verifica en esos casos no es solo el código de respuesta, sino que **no se escriba
+nada en la base de datos**.
+
 ### Migraciones de esquema (Alembic)
 
 El esquema lo gestiona Alembic. La aplicación **no** crea ni modifica tablas al
@@ -269,7 +291,7 @@ docker exec sivia_db mysqldump -u root -p"$MYSQL_ROOT_PASSWORD" sivia_db \
 | API de movimientos y stock | ✅ |
 | Autenticación + CORS | ✅ |
 | Migraciones de esquema (Alembic) | ✅ |
-| Suite de tests automatizados | ⬜ Pendiente |
+| Suite de tests automatizados | ✅ 79 tests |
 | App móvil / captura de voz | ⬜ Pendiente |
 | Catálogo de productos y unidades de medida | ⬜ Pendiente |
 | Multiusuario y auditoría | ⬜ Pendiente |
