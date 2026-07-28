@@ -38,11 +38,28 @@ sudo mkdir -p /etc/systemd/system/ollama.service.d
 sudo tee /etc/systemd/system/ollama.service.d/override.conf <<'EOF'
 [Service]
 Environment="OLLAMA_HOST=0.0.0.0:11434"
+Environment="OLLAMA_KEEP_ALIVE=-1"
 EOF
 sudo systemctl daemon-reload && sudo systemctl restart ollama
 
 ollama pull qwen2.5:3b
 ```
+
+`OLLAMA_KEEP_ALIVE=-1` mantiene el modelo residente en RAM (1.9 GB de los 8 GB).
+Sin él, la primera petición tras un rato de inactividad tarda **~21 s** en lugar
+de **~6,5 s**, porque Ollama descarga el modelo al quedar ocioso.
+
+### Latencia esperada
+
+Medido en Raspberry Pi 5, extremo a extremo incluyendo la escritura en MySQL:
+
+| Escenario | Latencia |
+|---|---|
+| Modelo residente en RAM | **~6,5 s** |
+| Primera petición tras arrancar | ~21,5 s |
+
+`OLLAMA_TIMEOUT` está en 60 s por ese margen. Para bajar de 6,5 s la vía es un
+modelo más pequeño (`qwen2.5:1.5b`), a costa de precisión en la extracción.
 
 ---
 

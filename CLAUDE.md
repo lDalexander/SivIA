@@ -25,6 +25,13 @@
 ### 3.1 Motor de IA (Edge LLM — Nativo) ✅ Operativo
 - **Plataforma:** Ollama nativo como servicio de `systemd` en el host (no en Docker), para aprovechar las instrucciones de aceleración CPU ARM.
 - **Modelo:** `qwen2.5:3b` cuantizado (1.9 GB).
+- **Latencia medida** (Pi 5, 2026-07-27, extremo a extremo incluyendo la escritura en MySQL):
+  - **~6,5 s** por comando con el modelo ya cargado en RAM.
+  - **~21,5 s** en la primera petición tras arrancar u ociosa (carga del modelo).
+  La documentación previa afirmaba «<2 s»; no se corresponde con la medición.
+  `OLLAMA_TIMEOUT` está en 60 s por ese margen. Si se necesita bajar la latencia,
+  las vías son `OLLAMA_KEEP_ALIVE` para evitar la descarga del modelo, o un
+  modelo más pequeño (`qwen2.5:1.5b`).
 - **Binding de Red:** `0.0.0.0:11434`, configurado mediante
   `/etc/systemd/system/ollama.service.d/override.conf`. Accesible desde los
   contenedores por `172.17.0.1:11434` y por `host.docker.internal`.

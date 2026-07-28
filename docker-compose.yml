@@ -21,7 +21,11 @@ services:
       timeout: 5s
       retries: 5
       start_period: 30s
-    mem_limit: 1500m
+    # mem_limit deshabilitado: el kernel de Raspberry Pi OS no monta el cgroup de
+    # memoria por defecto, así que Docker descarta el límite y solo emite ruido.
+    # Para activarlo: añadir 'cgroup_enable=memory cgroup_memory=1' a
+    # /boot/firmware/cmdline.txt, reiniciar, y descomentar la línea siguiente.
+    # mem_limit: 1500m
     logging:
       driver: json-file
       options:
@@ -50,7 +54,8 @@ services:
     # además de la IP del bridge 172.17.0.1.
     extra_hosts:
       - "host.docker.internal:host-gateway"
-    mem_limit: 512m
+    # Ver la nota sobre mem_limit en el servicio 'db'.
+    # mem_limit: 512m
     logging:
       driver: json-file
       options:
