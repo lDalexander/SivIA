@@ -18,12 +18,11 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import APIKeyHeader
 from pydantic import BaseModel, Field, field_validator
-from sqlalchemy import (
-    create_engine, Column, Integer, String, DateTime, CheckConstraint,
-    func, case, text,
-)
+from sqlalchemy import create_engine, func, case, text
 from sqlalchemy.exc import OperationalError
-from sqlalchemy.orm import declarative_base, sessionmaker, Session
+from sqlalchemy.orm import sessionmaker, Session
+
+from models import MovimientoInventario, TIPOS_MOVIMIENTO_VALIDOS
 
 # --- CONFIGURACIÓN DE LOGS ---
 logging.basicConfig(
@@ -52,40 +51,12 @@ MODEL_NAME = os.getenv("MODEL_NAME", "qwen2.5:3b")
 OLLAMA_TIMEOUT = float(os.getenv("OLLAMA_TIMEOUT", "60"))
 CORS_ORIGINS = [o.strip() for o in os.getenv("CORS_ORIGINS", "*").split(",") if o.strip()]
 
-TIPOS_MOVIMIENTO_VALIDOS = ("INGRESO", "EGRESO")
-
 # --- CONFIGURACIÓN DE SQLALCHEMY ---
+# El esquema vive en models.py y lo gestiona Alembic (ver migrations/).
 # pool_pre_ping descarta conexiones muertas (MySQL cierra tras wait_timeout);
 # pool_recycle las renueva antes de que el servidor las corte.
 engine = create_engine(DATABASE_URL, pool_pre_ping=True, pool_recycle=1800)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-Base = declarative_base()
-
-
-def ahora_utc() -> datetime:
-    """UTC como datetime naive: MySQL DATETIME no almacena zona horaria,
-    así que se guarda UTC explícitamente y se marca como tal en la salida."""
-    return datetime.now(timezone.utc).replace(tzinfo=None)
-
-
-# --- MODELO DE BASE DE DATOS (MySQL) ---
-class MovimientoInventario(Base):
-    __tablename__ = "movimientos_inventario"
-    __table_args__ = (
-        # La integridad no depende solo de la validación en Python: si algún día
-        # se escribe por SQL directo, el motor sigue rechazando datos imposibles.
-        CheckConstraint("cantidad > 0", name="ck_cantidad_positiva"),
-        CheckConstraint(
-            "tipo_movimiento IN ('INGRESO', 'EGRESO')",
-            name="ck_tipo_movimiento_valido",
-        ),
-    )
-
-    id = Column(Integer, primary_key=True, index=True)
-    producto = Column(String(100), nullable=False, index=True)
-    cantidad = Column(Integer, nullable=False)
-    tipo_movimiento = Column(String(20), nullable=False)  # 'INGRESO' o 'EGRESO'
-    fecha = Column(DateTime, nullable=False, default=ahora_utc, index=True)
 
 
 # --- ESQUEMAS PYDANTIC (Validación de JSON) ---
@@ -183,17 +154,25 @@ def get_db():
 
 # --- ARRANQUE ---
 @app.on_event("startup")
-def inicializar_base_de_datos() -> None:
-    """Crea las tablas al arrancar, con reintentos.
+def verificar_base_de_datos() -> None:
+    """Espera a que MySQL acepte conexiones y comprueba el estado del esquema.
 
-    Va aquí y no en tiempo de import para que MySQL pueda tardar en aceptar
-    conexiones sin tumbar el proceso durante el import del módulo.
+    Deliberadamente NO crea ni modifica tablas: el esquema lo gestiona Alembic
+    (`bash scripts/migrar.sh upgrade`). Con create_all() aquí, un modelo
+    modificado y una migración sin aplicar convivían en silencio, porque
+    create_all() crea tablas ausentes pero nunca altera las existentes.
+
+    Va en el startup y no en tiempo de import para que MySQL pueda tardar en
+    aceptar conexiones sin tumbar el proceso durante el import del módulo.
     """
     ultimo_error: Optional[Exception] = None
     for intento in range(1, 11):
         try:
-            Base.metadata.create_all(bind=engine)
-            logger.info("Esquema de base de datos verificado correctamente.")
+            with engine.connect() as conexion:
+                revision = conexion.execute(
+                    text("SELECT version_num FROM alembic_version")
+                ).scalar()
+            logger.info("Base de datos accesible. Revisión de esquema: %s", revision)
             return
         except OperationalError as exc:
             ultimo_error = exc
@@ -202,7 +181,16 @@ def inicializar_base_de_datos() -> None:
                 intento,
             )
             time.sleep(3)
-    raise RuntimeError(f"No se pudo inicializar el esquema de datos: {ultimo_error}")
+        except Exception:
+            # La tabla alembic_version no existe: base sin migrar. No es motivo
+            # para abortar (los endpoints de lectura y /health siguen siendo
+            # útiles), pero debe quedar bien visible en los logs.
+            logger.error(
+                "La base de datos no tiene migraciones aplicadas. "
+                "Ejecutar: bash scripts/migrar.sh upgrade"
+            )
+            return
+    raise RuntimeError(f"No se pudo conectar con la base de datos: {ultimo_error}")
 
 
 # --- UTILIDADES INTERNAS ---

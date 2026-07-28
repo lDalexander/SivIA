@@ -5,3 +5,4 @@ httpx==0.27.0
 sqlalchemy==2.0.31
 pymysql==1.1.1
 cryptography==42.0.8
+alembic==1.13.2

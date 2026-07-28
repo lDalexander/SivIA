@@ -54,8 +54,30 @@
 - **Fail-fast:** si falta `DATABASE_URL` o `SIVIA_API_KEY`, el proceso **aborta**
   el arranque. Antes había un fallback a SQLite que hacía que la app pareciera
   arrancar bien mientras escribía a un archivo efímero dentro del contenedor.
-- **Esquema:** `create_all()` se ejecuta en el evento `startup` con 10 reintentos,
-  no en tiempo de import, para tolerar que MySQL tarde en aceptar conexiones.
+- **Esquema:** gestionado por **Alembic** (ver §3.4). El evento `startup` con 10
+  reintentos ya **no crea tablas**: solo espera a que MySQL acepte conexiones y
+  registra en el log la revisión aplicada. No devolver `create_all()` aquí — ver
+  la decisión 6 de la §6.
+
+### 3.4 Migraciones de Esquema (Alembic) ✅ Operativo
+- **Modelo aislado:** el esquema vive en `backend/models.py`, no en `main.py`, para
+  que Alembic pueda importarlo sin la configuración de la aplicación (`main.py`
+  aborta si faltan `DATABASE_URL` o `SIVIA_API_KEY`, lo que impediría generar
+  migraciones).
+- **Credenciales:** `alembic.ini` **no** contiene la URL de conexión; `env.py` la
+  toma de `DATABASE_URL` para que los secretos vivan solo en `.env`.
+- **Ejecución:** `scripts/migrar.sh` lanza Alembic en un contenedor **efímero**
+  (`docker compose run --rm`), destruido al terminar. Sin proceso residente ni
+  consumo de memoria permanente, y sin instalar nada en el host.
+- **Detalle de implementación:** el contenedor se ejecuta con `--user $(id -u):$(id -g)`
+  porque la imagen corre como `appuser` (uid 1001) y no podría escribir las
+  revisiones autogeneradas en el directorio del host, propiedad de `admin` (uid 1000).
+- **Revisión base:** `b7e4c1a09f52` (esquema inicial). Se aplicó a la base
+  preexistente con `stamp`, no con `upgrade`, porque la tabla ya existía;
+  `migrar.sh upgrade` detecta ese caso automáticamente.
+- **Verificado:** `revision --autogenerate` sobre el esquema vivo produce un
+  `upgrade()` vacío, lo que confirma que la revisión base es fiel al esquema real.
+  El ciclo `upgrade` → `downgrade` se probó extremo a extremo sin pérdida de datos.
 
 ### 3.3 Base de Datos (Contenedor Docker) ✅ Operativo
 - **Motor:** MySQL 8.0 (arm64).
@@ -80,10 +102,18 @@
 ├── .gitignore
 ├── README.md
 ├── CLAUDE.md
+├── scripts/
+│   ├── migrar.sh         # gestión de migraciones (Alembic)
+│   └── aplicar_rotacion.sh
 ├── backend/
 │   ├── Dockerfile        # multi-etapa, usuario no-root
 │   ├── .dockerignore
 │   ├── requirements.txt
+│   ├── alembic.ini
+│   ├── migrations/       # revisiones de esquema versionadas
+│   │   ├── env.py
+│   │   └── versions/
+│   ├── models.py         # esquema SQLAlchemy (aislado de la config de la app)
 │   └── main.py
 └── database/
     └── data/             # volumen MySQL — excluido por .gitignore
@@ -126,6 +156,11 @@ credenciales, como exige la especificación CORS.
    corregir un error es entrar a MySQL a mano.
 5. **`GET /api/stock` es lo que da sentido al producto.** El histórico de
    movimientos no responde «¿cuántas arepas tengo?».
+6. **No reintroducir `create_all()` en el arranque.** Con Alembic gestionando el
+   esquema, `create_all()` volvería a ser una fuente de divergencia silenciosa:
+   crea las tablas ausentes pero nunca altera las existentes, así que un modelo
+   modificado y una migración sin aplicar convivirían sin dar ningún error. El
+   arranque solo verifica la conexión y registra la revisión vigente.
 
 ---
 
@@ -144,15 +179,19 @@ ollama list                      # modelos descargados
 
 ## 8. Pendientes conocidos
 
-- ⬜ **Migraciones de esquema (Alembic).** `create_all()` no altera tablas
-  existentes: el próximo cambio de esquema exige SQL manual. Las constraints
-  `CHECK` y el índice de `fecha` se aplicaron por `ALTER TABLE` sobre el volumen
-  ya inicializado, por eso están en el modelo y también en el esquema vivo.
 - ⬜ **Suite de tests.** No hay ninguna. Hoy la única verificación es `curl` manual.
 - ⬜ **App móvil / captura de voz.** No existe. El proyecto es backend puro; la
   transcripción de audio a texto se asume externa (el endpoint recibe ya el texto).
 - ⬜ **Catálogo de productos y unidades de medida.** `producto` es texto libre
   normalizado; «AREPA» y «AREPAS» son productos distintos para el sistema.
+- ⬜ **Normalización de nombres de producto multipalabra.** Defecto observado el
+  2026-07-28: el comando «Llegaron 20 panes de yuca» se guardó como
+  `PANES_DE_YACA` — el modelo insertó guiones bajos y además escribió mal «yuca».
+  El prompt exige mayúsculas pero no dice nada sobre separadores ni sobre
+  preservar la ortografía literal. Con texto libre, cada variante crea un producto
+  distinto y fragmenta el stock en silencio. Arreglo mínimo: reforzar el prompt
+  (espacios, no guiones bajos; no corregir ni inventar palabras). Arreglo real: el
+  catálogo de productos con validación contra una lista cerrada.
 - ⬜ **Multiusuario y auditoría.** Una sola API key compartida; los movimientos no
   registran autor.
 - ⬜ **Backups automatizados.** El comando de `mysqldump` está documentado en el

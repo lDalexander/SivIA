@@ -76,7 +76,8 @@ python3 -c "import secrets,string; a=string.ascii_letters+string.digits; print('
 python3 -c "import secrets; print(secrets.token_urlsafe(36))"   # para SIVIA_API_KEY
 
 docker compose up -d --build
-docker compose ps          # ambos servicios deben quedar 'healthy'
+bash scripts/migrar.sh upgrade   # crea el esquema de la base de datos
+docker compose ps                # ambos servicios deben quedar 'healthy'
 ```
 
 Documentación interactiva de la API: **http://localhost:8000/docs**
@@ -213,6 +214,33 @@ systemctl status ollama             # estado del motor de IA
 curl localhost:8000/health          # diagnóstico rápido de dependencias
 ```
 
+### Migraciones de esquema (Alembic)
+
+El esquema lo gestiona Alembic. La aplicación **no** crea ni modifica tablas al
+arrancar: solo verifica la conexión y registra en el log la revisión aplicada.
+
+```bash
+bash scripts/migrar.sh estado                 # revisión aplicada actualmente
+bash scripts/migrar.sh historial              # historial de migraciones
+bash scripts/migrar.sh upgrade                # aplicar las pendientes
+bash scripts/migrar.sh nueva "descripción"    # autogenerar desde models.py
+bash scripts/migrar.sh downgrade              # revertir la última
+bash scripts/migrar.sh sql                    # ver el SQL sin ejecutarlo
+```
+
+Para cambiar el esquema: se edita el modelo en `backend/models.py`, se genera la
+revisión con `nueva`, **se revisa el archivo producido** en
+`backend/migrations/versions/`, y se aplica con `upgrade`.
+
+Alembic se ejecuta en un contenedor efímero que se destruye al terminar: no hay
+proceso residente ni consumo de memoria permanente, y no requiere instalar nada
+en el host.
+
+> ⚠️ El autogenerado acierta con altas y bajas de columnas, pero no adivina las
+> migraciones de datos ni los renombrados: un renombrado lo ve como una baja más
+> un alta, lo que **borraría los datos** de esa columna. Revisar siempre el
+> archivo antes de aplicarlo, y comprobar el SQL con `migrar.sh sql`.
+
 **Backup de la base de datos**
 
 ```bash
@@ -240,7 +268,7 @@ docker exec sivia_db mysqldump -u root -p"$MYSQL_ROOT_PASSWORD" sivia_db \
 | Motor de IA (Ollama + Qwen2.5:3b) | ✅ |
 | API de movimientos y stock | ✅ |
 | Autenticación + CORS | ✅ |
-| Migraciones de esquema (Alembic) | ⬜ Pendiente |
+| Migraciones de esquema (Alembic) | ✅ |
 | Suite de tests automatizados | ⬜ Pendiente |
 | App móvil / captura de voz | ⬜ Pendiente |
 | Catálogo de productos y unidades de medida | ⬜ Pendiente |
