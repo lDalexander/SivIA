@@ -593,7 +593,40 @@ servidor (`/health`), voz activada o no.
 
 ---
 
-## 11. Stack sugerido
+## 11. Identidad de la app
+
+**Esto no es negociable ni hay que deducirlo.** Android Studio propone un
+`applicationId` derivado del dominio de quien crea el proyecto; **ignóralo** y usa
+exactamente este:
+
+```kotlin
+// app/build.gradle.kts
+android {
+    namespace = "com.sivia.app"
+    defaultConfig {
+        applicationId = "com.sivia.app"
+        // ...
+    }
+}
+```
+
+| Campo | Valor |
+|---|---|
+| `applicationId` / `namespace` | `com.sivia.app` |
+| Nombre visible (`app_name`) | `SivIA` |
+| Estructura de paquetes | `com.sivia.app.ui`, `com.sivia.app.data`, `com.sivia.app.network` |
+
+SivIA es un proyecto independiente. **No debe llevar el nombre, el dominio ni la
+marca de ninguna empresa** en el paquete, en el nombre visible, en los recursos
+ni en los metadatos del manifiesto.
+
+El `applicationId` es la identidad permanente de la app para Android: cambiarlo
+después de instalarla equivale a una app distinta, y obliga a desinstalar y
+reinstalar perdiendo la sesión guardada. Conviene acertar a la primera.
+
+---
+
+## 12. Stack sugerido
 
 No es obligatorio, pero encaja bien con lo que hay:
 
@@ -611,7 +644,7 @@ centralizada ahorra repetir esa lógica en cada pantalla.
 
 ---
 
-## 12. Lista de comprobación
+## 13. Lista de comprobación
 
 Funcionalidad:
 - [ ] Login, sesión persistida, arranque con `GET /api/auth/yo`
@@ -624,6 +657,8 @@ Funcionalidad:
 - [ ] Cambio de contraseña con vuelta al login
 
 Los que se olvidan y duelen después:
+- [ ] `applicationId = "com.sivia.app"` — **no** el que proponga Android Studio
+      por defecto a partir del dominio de quien crea el proyecto (§11)
 - [ ] `network_security_config.xml` (sin él **no conecta**)
 - [ ] `readTimeout` de 120 s (sin él **todo mensaje falla**)
 - [ ] Fechas convertidas de UTC a local
@@ -641,7 +676,7 @@ Probar a mano:
 
 ---
 
-## 13. Cómo probar contra el servidor real
+## 14. Cómo probar contra el servidor real
 
 Con Tailscale conectado, desde cualquier terminal:
 
@@ -670,7 +705,7 @@ probar cada endpoint: <http://100.110.69.36:8000/docs>
 
 ---
 
-## 14. Límites conocidos
+## 15. Límites conocidos
 
 Cosas que el backend **no** hace hoy. Conviene saberlas para no diseñar
 pantallas que prometan lo que no hay:
